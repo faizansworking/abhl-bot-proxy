@@ -16,9 +16,10 @@
 // in the browser instead, against data the app has already loaded, so they
 // inherit the user's real permissions from firestore.rules for free.
 //
-// The catch-all path means the app can point the Vercel AI SDK's `baseURL`
-// straight at this function and everything downstream (model name, streaming,
-// tool calling) works unchanged.
+// ROUTING: the app points the Vercel AI SDK's `baseURL` at /api/gemini, and the
+// SDK then appends paths like `/models/<model>:streamGenerateContent`. The
+// rewrite in vercel.json turns that into `?path=models/<model>:stream...` so we
+// never depend on filesystem catch-all routing, which is the thing that 404'd.
 // ---------------------------------------------------------------------------
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
@@ -103,10 +104,20 @@ export default async function handler(req: Request): Promise<Response> {
     return fail(`Not signed in: ${(err as Error).message}`, 401, cors);
   }
 
-  // --- 2. Forward to Google -------------------------------------------------
+  // --- 2. Work out what to call upstream ------------------------------------
   const url = new URL(req.url);
-  const path = url.pathname.replace(/^\/api\/gemini\/?/, '');
-  if (!path) return fail('No upstream path given', 400, cors);
+  const path = url.searchParams.get('path');
+  if (!path) {
+    return fail(
+      'No upstream path. Call /api/gemini/models/<model>:generateContent, not /api/gemini directly.',
+      400,
+      cors,
+    );
+  }
+  // Everything except our own `path` marker is a real Gemini query param
+  // (notably ?alt=sse, which is how streaming is requested).
+  url.searchParams.delete('path');
+  const query = url.searchParams.toString();
 
   // Shows up in the Vercel logs — the quickest way to see who is using the bot
   // and which model they hit when something misbehaves.
@@ -114,7 +125,7 @@ export default async function handler(req: Request): Promise<Response> {
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${UPSTREAM}/${path}${url.search}`, {
+    upstream = await fetch(`${UPSTREAM}/${path}${query ? `?${query}` : ''}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
       body: req.body,
