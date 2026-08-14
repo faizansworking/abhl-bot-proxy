@@ -1,0 +1,16 @@
+{
+  "name": "abhl-bot-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gemini proxy for the ABHL Associates in-app assistant. Verifies Firebase ID tokens, holds the API key, forwards to Google. Never touches Firestore.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.2",
+    "@types/node": "^22.14.0"
+  }
+}
