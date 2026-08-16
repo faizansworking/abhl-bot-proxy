@@ -10,6 +10,10 @@ export default async function handler(): Promise<Response> {
     service: 'abhl-bot-proxy',
     env: {
       GEMINI_API_KEY: process.env.GEMINI_API_KEY ? 'set' : 'MISSING',
+      SARVAM_API_KEY: process.env.SARVAM_API_KEY ? 'set' : 'MISSING',
+      GROQ_API_KEY: process.env.GROQ_API_KEY ? 'set' : 'MISSING',
+      CEREBRAS_API_KEY: process.env.CEREBRAS_API_KEY ? 'set' : 'MISSING',
+      MISTRAL_API_KEY: process.env.MISTRAL_API_KEY ? 'set' : 'MISSING',
       FIREBASE_PROJECT_IDS: process.env.FIREBASE_PROJECT_IDS ?? 'MISSING',
       ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS ?? 'MISSING',
     },

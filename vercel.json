@@ -4,6 +4,10 @@
     {
       "source": "/api/gemini/(.*)",
       "destination": "/api/gemini?path=$1"
+    },
+    {
+      "source": "/api/llm/(.*)",
+      "destination": "/api/llm?path=$1"
     }
   ]
 }
