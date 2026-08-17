@@ -107,13 +107,30 @@ export default async function handler(req: Request): Promise<Response> {
     return fail(`Could not reach ${name}: ${(err as Error).message}`, 502, cors);
   }
 
-  // Straight through, errors included. A 429 here is the signal the app uses
-  // to give up on this provider and try the next one.
+  // A rejected key does not come back as JSON. Groq, Cerebras and Mistral all
+  // sit behind Cloudflare, which answers with a full HTML error page — and
+  // passing that through meant the app showed the partner a screen of
+  // "<!DOCTYPE html><!--[if lt IE 7]>" with no clue which provider it came
+  // from. So anything that is not JSON gets turned into one line that names
+  // the provider and the variable to go and fix.
+  const type = upstream.headers.get('content-type') ?? '';
+  if (!upstream.ok && !type.includes('json')) {
+    const body = await upstream.text().catch(() => '');
+    console.log(`[llm] ${name} rejected us: ${upstream.status} ${body.slice(0, 200)}`);
+    return fail(
+      `${name} refused the request (HTTP ${upstream.status}). Check ${provider.env} in Vercel, then redeploy.`,
+      upstream.status,
+      cors,
+    );
+  }
+
+  // Otherwise straight through, errors included. A 429 here is the signal the
+  // app uses to give up on this provider and try the next one.
   return new Response(upstream.body, {
     status: upstream.status,
     headers: {
       ...cors,
-      'content-type': upstream.headers.get('content-type') ?? 'application/json',
+      'content-type': type || 'application/json',
       'cache-control': 'no-store',
     },
   });
