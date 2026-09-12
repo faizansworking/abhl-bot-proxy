@@ -12,7 +12,8 @@ THIS PROXY  (Vercel)
   │  verifies the token against Google's PUBLIC keys   (api/_shared.ts)
   │
   ├─ /api/gemini  → adds GEMINI_API_KEY → Google Gemini      (thinking)
-  └─ /api/sarvam  → adds SARVAM_API_KEY → Sarvam AI          (voice)
+  ├─ /api/sarvam  → adds SARVAM_API_KEY → Sarvam AI          (voice)
+  └─ /api/gmail   → adds the central Gmail token → Gmail API (client mail)
 ```
 
 ## Why it exists
@@ -55,6 +56,7 @@ Set these in Vercel → Settings → Environment Variables. See `.env.example`.
 |---|---|
 | `GEMINI_API_KEY` | From [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Free tier, no card. |
 | `SARVAM_API_KEY` | The bot's voice. From [dashboard.sarvam.ai](https://dashboard.sarvam.ai). Free trial credits, then billed per character. If missing, the app falls back to the browser's own voice. |
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | The firm's central Gmail. See [Gmail](#gmail) below. |
 | `FIREBASE_PROJECT_IDS` | Comma-separated project ids whose users may call the bot. Tokens from anywhere else get a 401. |
 | `ALLOWED_ORIGINS` | Comma-separated sites allowed to call this from a browser. Everything else is blocked by CORS. |
 
@@ -99,6 +101,53 @@ The model, sample rate and preprocessing are fixed in `api/sarvam.ts`. Changing
 the voice is a one-line edit there plus a redeploy — deliberately not something
 the app can do. Each call logs `uid` and character count, so Vercel's logs are
 where you see who is spending the voice budget.
+
+### `/api/gmail` — the firm's shared mailbox
+
+```
+POST https://<your-project>.vercel.app/api/gmail
+Authorization: Bearer <firebase id token>
+{ "action": "sync", "historyId": "123456" }     → { historyId, messages: [...], full }
+{ "action": "send", "to": "...", "subject": "...", "body": "..." } → { id, threadId }
+```
+
+**Only metadata leaves this route** — sender, subject, date, snippet, attachment
+*names*. Bodies are fetched from Gmail and dropped inside the function. The app
+is a "who mailed us, has anyone answered" board with a per-person read state;
+reading and replying still happen in Gmail. `send` is plain text and is what
+the app's scheduled client reminders use.
+
+`historyId` is Gmail's own change cursor: the app sends the newest one it holds
+and gets back only what is new. Gmail forgets cursors after about a week, so a
+stale one falls back to "the last 14 days" with `full: true` and the app
+de-duplicates.
+
+## Gmail
+
+One-time setup, about ten minutes, all in the browser:
+
+1. [console.cloud.google.com](https://console.cloud.google.com) → pick (or
+   create) a project → **APIs & Services → Library → Gmail API → Enable**.
+2. **OAuth consent screen** → External → fill the app name + your email →
+   **Publish app** so its status reads *In production*. This matters: an app
+   left in *Testing* expires every refresh token after **7 days**, and the mail
+   feed would silently stop each week. Google shows an "unverified app" warning
+   on the consent page — that is expected for a single-mailbox internal tool;
+   click *Advanced → Go to …* once.
+3. **Credentials → Create credentials → OAuth client ID → Web application.**
+   Authorised redirect URI: `https://<your-project>.vercel.app/api/gmail-setup`
+   (exact, https, no trailing slash). Copy the client id + secret.
+4. Vercel → Settings → Environment Variables: `GMAIL_CLIENT_ID`,
+   `GMAIL_CLIENT_SECRET`. **Redeploy.**
+5. Open `https://<your-project>.vercel.app/api/gmail-setup`, sign in **as the
+   central mailbox** (cainfo.abhl@gmail.com), allow *read* and *send*. The page
+   shows the mailbox it connected and a refresh token.
+6. Paste it as `GMAIL_REFRESH_TOKEN`. **Redeploy.** `/api/health` should now
+   list all three as `set`, and the app's Mail tab starts filling on its next sync.
+
+To disconnect: delete `GMAIL_REFRESH_TOKEN` in Vercel and remove the app at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions).
+If the app ever reports "Gmail refused the refresh token", repeat steps 5–6.
 
 ## Changing a key
 
