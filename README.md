@@ -24,7 +24,7 @@ smallest possible place to keep it.
 
 ## What it deliberately does not do
 
-**It never touches Firestore, and there is no Firebase service-account key here.**
+**It never touches Firestore for the assistant, and the assistant has no service-account key.** (The optional Gmail push endpoint is the one narrow exception — a create-only writer with a Datastore-User-only key; see that section.)
 That is a design decision, not an omission — see `BOT-SESSION-BRIEF.md` §2 in the
 app repo, which recommends the opposite, and the reasoning we chose instead:
 
@@ -57,6 +57,7 @@ Set these in Vercel → Settings → Environment Variables. See `.env.example`.
 | `GEMINI_API_KEY` | From [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Free tier, no card. |
 | `SARVAM_API_KEY` | The bot's voice. From [dashboard.sarvam.ai](https://dashboard.sarvam.ai). Free trial credits, then billed per character. If missing, the app falls back to the browser's own voice. |
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | The firm's central Gmail. See [Gmail](#gmail) below. |
+| `GMAIL_PUSH_TOPIC` / `GMAIL_PUSH_SECRET` / `FIREBASE_SA_KEY` | Optional. Gmail push. See [Gmail push](#gmail-push-optional--mail-lands-within-seconds-app-open-or-not). |
 | `FIREBASE_PROJECT_IDS` | Comma-separated project ids whose users may call the bot. Tokens from anywhere else get a 401. |
 | `ALLOWED_ORIGINS` | Comma-separated sites allowed to call this from a browser. Everything else is blocked by CORS. |
 
@@ -148,6 +149,44 @@ One-time setup, about ten minutes, all in the browser:
 To disconnect: delete `GMAIL_REFRESH_TOKEN` in Vercel and remove the app at
 [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
 If the app ever reports "Gmail refused the refresh token", repeat steps 5–6.
+
+## Gmail push (optional — mail lands within seconds, app open or not)
+
+Without this, the app polls Gmail every minute while a partner has it open —
+fine 10–7, blind at 2am. With it, Gmail tells us the moment a mail lands:
+
+```
+Gmail ──watch──▶ Pub/Sub topic ──push──▶ /api/gmail-push ──▶ Firestore mails/{id}
+```
+
+This is the ONE place the proxy touches Firestore, and it is kept to one verb:
+**create** a `mails` row by Gmail message id (creating an id that exists is a
+no-op, so push and the app's poll can never fight). The service account carries
+only *Cloud Datastore User*. Matching the mail to a client happens in the app
+when the row arrives, not here. The app also re-arms the watch once a day
+(Gmail forgets it after 7). All of it is free-tier.
+
+Setup — everything in the SAME Google Cloud project as the OAuth client above:
+
+1. **Service account.** IAM & Admin → Service Accounts → Create: name
+   `mail-push`. Grant role **Cloud Datastore User** (nothing else). Then
+   Keys → Add key → JSON → a file downloads. Open it in Notepad, copy ALL of it.
+2. **Pub/Sub topic.** Pub/Sub → Topics → Create topic, id `gmail-push`, untick
+   "Add a default subscription". Open the topic → Permissions → Add principal
+   `gmail-api-push@system.gserviceaccount.com`, role **Pub/Sub Publisher**.
+3. **Push subscription.** Pub/Sub → Subscriptions → Create: id
+   `gmail-push-to-proxy`, topic `gmail-push`, delivery type **Push**, endpoint
+   `https://<your-project>.vercel.app/api/gmail-push?token=SECRET` where
+   SECRET is a long random string you invent. Retry policy: **exponential
+   backoff** (min 10s, max 600s). Create.
+4. Vercel → Environment Variables: `GMAIL_PUSH_TOPIC` =
+   `projects/<gcp-project-id>/topics/gmail-push`, `GMAIL_PUSH_SECRET` = the
+   SECRET, `FIREBASE_SA_KEY` = the whole JSON from step 1. **Redeploy.**
+5. `/api/health` shows the three as set. The next time a manager opens the app
+   it arms the watch (Vercel logs show `[gmail] watch renewed`); send the
+   mailbox a test mail and Vercel logs show `[gmail-push] … created=1`.
+
+To switch push off: delete the three variables and redeploy. The app just polls.
 
 ## Changing a key
 
