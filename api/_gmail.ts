@@ -249,3 +249,44 @@ export async function watch(token: string): Promise<{ historyId: string; expirat
   });
   return { historyId: String(res.historyId ?? ''), expiration: String(res.expiration ?? '') };
 }
+
+
+// --- reading one mail's body, on demand -----------------------------------------
+// Nothing here is stored: the app shows it in a sandboxed frame and forgets it.
+const dec = (d: string) => {
+  const b = atob(d.replace(/-/g, '+').replace(/_/g, '/'));
+  return new TextDecoder().decode(Uint8Array.from(b, (c) => c.charCodeAt(0)));
+};
+const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function findPart(part: any, mime: string): any {
+  if (!part) return null;
+  if (part.mimeType === mime && part.body?.data) return part;
+  for (const p of part.parts ?? []) { const f = findPart(p, mime); if (f) return f; }
+  return null;
+}
+function inlineParts(part: any, out: any[] = []): any[] {
+  if (!part) return out;
+  const cid = (part.headers ?? []).find((h: any) => h.name.toLowerCase() === 'content-id')?.value;
+  if (cid && part.body?.attachmentId && String(part.mimeType).startsWith('image/')) out.push({ cid: cid.replace(/[<>]/g, ''), part });
+  for (const p of part.parts ?? []) inlineParts(p, out);
+  return out;
+}
+
+export async function read(id: string, token: string): Promise<{ html: string }> {
+  const msg = await gmail(`/messages/${encodeURIComponent(id)}?format=full`, token);
+  if (msg.__notFound) throw new Error('That mail is no longer in Gmail');
+  const h = findPart(msg.payload, 'text/html');
+  const t = findPart(msg.payload, 'text/plain');
+  let html = h
+    ? dec(h.body.data)
+    : `<div style="white-space:pre-wrap;font-family:Arial,sans-serif;font-size:14px">${esc(t ? dec(t.body.data) : String(msg.snippet ?? ''))}</div>`;
+  // Pictures embedded in the mail (cid:) only exist inside Gmail — inline them
+  // as data: URIs so the signature logo shows. Capped, so one mail can't balloon.
+  for (const { cid, part } of inlineParts(msg.payload).slice(0, 8)) {
+    if (!html.includes(`cid:${cid}`) || Number(part.body.size) > 400_000) continue;
+    const a = await gmail(`/messages/${encodeURIComponent(id)}/attachments/${part.body.attachmentId}`, token);
+    if (a.data) html = html.split(`cid:${cid}`).join(`data:${part.mimeType};base64,${a.data.replace(/-/g, '+').replace(/_/g, '/')}`);
+  }
+  return { html };
+}
