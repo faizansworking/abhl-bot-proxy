@@ -213,17 +213,39 @@ export async function send(body: any, token: string) {
   if (!subject) throw new Error('`subject` is required');
   if (text.length > MAX_BODY_CHARS) throw new Error(`Body too long (limit ${MAX_BODY_CHARS} characters)`);
 
+  const html = body.html ? String(body.html) : '';
+  if (html.length > MAX_BODY_CHARS * 5) throw new Error('HTML too long');
+  const files: { name: string; mime?: string; data: string }[] = Array.isArray(body.attachments) ? body.attachments : [];
+  const bcc = String(body.bcc ?? '').trim();
+
+  // The readable part: text only, or text + HTML (clients pick the richer one).
+  const lines = (s: string) => s.replace(/(.{76})/g, '$1\r\n');
+  const alt = html
+    ? ['Content-Type: multipart/alternative; boundary="abhl-alt"', '',
+        '--abhl-alt', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: 8bit', '', text,
+        '--abhl-alt', 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: 8bit', '', html,
+        '--abhl-alt--']
+    : ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: 8bit', '', text];
+  // With files the whole thing is wrapped in multipart/mixed.
+  const content = files.length
+    ? ['Content-Type: multipart/mixed; boundary="abhl-mix"', '', '--abhl-mix', ...alt,
+        ...files.flatMap((f) => ['--abhl-mix',
+          `Content-Type: ${f.mime || 'application/octet-stream'}; name="${encodeHeader(f.name)}"`,
+          `Content-Disposition: attachment; filename="${encodeHeader(f.name)}"`,
+          'Content-Transfer-Encoding: base64', '', lines(String(f.data))]),
+        '--abhl-mix--']
+    : alt;
+
   const headers = [
     `To: ${to}`,
     cc ? `Cc: ${cc}` : '',
+    bcc ? `Bcc: ${bcc}` : '',
     `Subject: ${encodeHeader(subject)}`,
     body.inReplyTo ? `In-Reply-To: ${body.inReplyTo}` : '',
     body.inReplyTo ? `References: ${body.inReplyTo}` : '',
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset="UTF-8"',
-    'Content-Transfer-Encoding: 8bit',
   ].filter(Boolean);
-  const raw = [...headers, '', text].join('\r\n');
+  const raw = [...headers, ...content].join('\r\n');
 
   const payload: any = { raw: b64url(raw) };
   if (body.threadId) payload.threadId = String(body.threadId);
@@ -273,7 +295,7 @@ function inlineParts(part: any, out: any[] = []): any[] {
   return out;
 }
 
-export async function read(id: string, token: string): Promise<{ html: string }> {
+export async function read(id: string, token: string): Promise<{ html: string; attachments: { name: string; mime: string; size: number; attachmentId: string }[] }> {
   const msg = await gmail(`/messages/${encodeURIComponent(id)}?format=full`, token);
   if (msg.__notFound) throw new Error('That mail is no longer in Gmail');
   const h = findPart(msg.payload, 'text/html');
@@ -288,5 +310,23 @@ export async function read(id: string, token: string): Promise<{ html: string }>
     const a = await gmail(`/messages/${encodeURIComponent(id)}/attachments/${part.body.attachmentId}`, token);
     if (a.data) html = html.split(`cid:${cid}`).join(`data:${part.mimeType};base64,${a.data.replace(/-/g, '+').replace(/_/g, '/')}`);
   }
-  return { html };
+  // Real attachments; pictures already drawn inside the mail (cid) are skipped.
+  const attachments: { name: string; mime: string; size: number; attachmentId: string }[] = [];
+  const walk = (p: any) => {
+    if (!p) return;
+    const cid = (p.headers ?? []).find((h: any) => h.name.toLowerCase() === 'content-id')?.value?.replace(/[<>]/g, '');
+    const drawn = cid && String(p.mimeType).startsWith('image/') && (h?.body?.data ? dec(h.body.data) : '').includes(`cid:${cid}`);
+    if (p.filename && p.body?.attachmentId && !drawn)
+      attachments.push({ name: String(p.filename), mime: String(p.mimeType ?? ''), size: Number(p.body.size ?? 0), attachmentId: String(p.body.attachmentId) });
+    for (const c of p.parts ?? []) walk(c);
+  };
+  walk(msg.payload);
+  return { html, attachments };
+}
+
+// One attachment's bytes, as standard base64 (the browser turns it into a download).
+export async function attachment(id: string, attachmentId: string, token: string): Promise<{ data: string }> {
+  const a = await gmail(`/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}`, token);
+  if (a.__notFound || !a.data) throw new Error('Attachment not found');
+  return { data: String(a.data).replace(/-/g, '+').replace(/_/g, '/') };
 }

@@ -33,7 +33,7 @@
 // ---------------------------------------------------------------------------
 
 import { corsHeaders, fail, guardMethod, verifyCaller } from './_shared';
-import { accessToken, DEFAULT_DAYS, read, send, sync, watch } from './_gmail';
+import { accessToken, DEFAULT_DAYS, attachment, read, send, sync, watch } from './_gmail';
 
 export const config = { runtime: 'edge' };
 // --- the door -----------------------------------------------------------------
@@ -66,6 +66,8 @@ export default async function handler(req: Request): Promise<Response> {
       console.log(`[gmail] sync uid=${caller.uid} got=${(result as any).messages.length} full=${(result as any).full}`);
     } else if (body?.action === 'read') {
       result = await read(String(body.id ?? ''), token);
+    } else if (body?.action === 'attachment') {
+      result = await attachment(String(body.id ?? ''), String(body.attachmentId ?? ''), token);
     } else if (body?.action === 'send') {
       result = await send(body, token);
       console.log(`[gmail] send uid=${caller.uid} to=${String(body.to ?? '').slice(0, 60)}`);
