@@ -148,6 +148,16 @@ export async function fetchMessages(ids: string[], token: string): Promise<MailM
   return out.sort((a, b) => (a.at < b.at ? 1 : -1));
 }
 
+// Gmail's own search (the same syntax as its search box: "from:x has:attachment
+// TDS notice"). Gmail already indexes every mail, so nothing is stored by us.
+export async function search(q: string, token: string): Promise<MailMeta[]> {
+  const text = q.trim().slice(0, 200);
+  if (!text) return [];
+  const params = new URLSearchParams({ maxResults: '30', q: `${text} -in:spam -in:trash -in:draft` });
+  const list = await gmail(`/messages?${params}`, token);
+  return fetchMessages((list.messages ?? []).map((m: any) => String(m.id)), token);
+}
+
 export async function sync(historyId: string, days: number, token: string) {
   // --- incremental: what changed since the cursor ------------------------
   if (historyId) {
