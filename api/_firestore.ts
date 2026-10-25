@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// The narrowest possible Firestore writer, for the Gmail push endpoint only
+// The narrowest possible Firestore writer: Gmail push (`mails`) + hiring (`candidates`)
 // ---------------------------------------------------------------------------
 // This proxy deliberately had NO Firestore access (see README). Push
 // notifications are the one job that cannot run in a browser — Gmail fires
