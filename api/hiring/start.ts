@@ -20,7 +20,7 @@ export default async function handler(req: Request): Promise<Response> {
       startedAt = new Date().toISOString();
       await mergeDoc(COLLECTION, t, { startedAt });
     }
-    return Response.redirect(testUrl(t, startedAt), 302);
+    return Response.redirect(testUrl(t, startedAt, c), 302);
   } catch (err) {
     console.error(`[hiring/start] ${(err as Error).message}`);
     return page('Something went wrong', 'Please try the link again in a minute.', 500);

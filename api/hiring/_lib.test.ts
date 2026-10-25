@@ -36,6 +36,7 @@ assert.deepEqual(timing('2026-10-25T10:00:00Z', '2026-10-25T11:01:00Z'), { minut
 // IST clock + deadline link (10:05 UTC + 60 min = 4:35 pm IST).
 assert.equal(istClock('2026-10-25T11:05:00Z'), '4:35 pm, 25 Oct (IST)');
 assert.match(testUrl(t1, '2026-10-25T10:05:00Z'), /t=[a-f0-9]{32}&deadline=4%3A35\+pm/);
+assert.match(testUrl(t1, '2026-10-25T10:05:00Z', { name: 'Rutuja S', email: 'r@x.com' }), /&name=Rutuja\+S&email=r%40x\.com$/);
 
 // Safety switch: never mails the real address unless HIRING_LIVE=true.
 assert.deepEqual(recipient('c@x.com', { HIRING_TEST_TO: 'me@x.com' }), { to: 'me@x.com', tag: '[TEST → c@x.com] ' });

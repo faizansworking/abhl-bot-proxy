@@ -78,8 +78,9 @@ export function timing(startedAt: string, submittedAt: string) {
   return { minutes, late: minutes > TEST_MINUTES };
 }
 
-export function testUrl(token: string, startedAt: string): string {
-  const q = new URLSearchParams({ t: token, deadline: istClock(deadlineOf(startedAt)) });
+// name + email ride along as Tally hidden fields so Submissions shows who is who (t stays the real key).
+export function testUrl(token: string, startedAt: string, who: { name?: unknown; email?: unknown } = {}): string {
+  const q = new URLSearchParams({ t: token, deadline: istClock(deadlineOf(startedAt)), name: String(who.name ?? ''), email: String(who.email ?? '') });
   return `${TEST_FORM_URL}?${q}`;
 }
 
