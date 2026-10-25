@@ -96,33 +96,23 @@ export function recipient(real: string, env: { HIRING_LIVE?: string; HIRING_TEST
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// Body + button only: the firm frame (logo, address, footer) is added by cv.ts.
 export function inviteMail(name: string, link: string) {
   const first = name.split(/\s+/)[0] || 'there';
-  const subject = 'ABHL & Associates – Articleship Assessment';
   const body = [
     `Dear ${first},`,
-    '',
     'Thank you for applying for articleship at ABHL & Associates.',
-    '',
-    `The next step is a short written assessment (12 questions, ${TEST_MINUTES} minutes). Your ${TEST_MINUTES} minutes start when you open the link below, so open it only when you are ready and can sit uninterrupted:`,
-    '',
-    link,
-    '',
+    `The next step is a short written assessment: 12 questions, ${TEST_MINUTES} minutes. Your ${TEST_MINUTES} minutes start when you click the button below, so open it only when you are ready and can sit uninterrupted.`,
     'Please answer in your own words. Your answers will be discussed with you in the personal interview.',
-    '',
-    'Regards,',
-    'ABHL & Associates',
-    'Vashi, Navi Mumbai',
-  ].join('\n');
-  const html = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#222">
-<p>Dear ${esc(first)},</p>
-<p>Thank you for applying for articleship at <b>ABHL &amp; Associates</b>.</p>
-<p>The next step is a short written assessment (<b>12 questions, ${TEST_MINUTES} minutes</b>). Your ${TEST_MINUTES} minutes start when you click the button, so open it only when you are ready and can sit uninterrupted.</p>
-<p><a href="${esc(link)}" style="display:inline-block;background:#3d57b5;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">Start the assessment</a></p>
-<p>Please answer in your own words. Your answers will be discussed with you in the personal interview.</p>
-<p>Regards,<br>ABHL &amp; Associates<br>Vashi, Navi Mumbai</p>
-</div>`;
-  return { subject, body, html };
+  ].join('\n\n');
+  return {
+    subject: 'ABHL & Associates – Articleship Assessment',
+    body: `${body}\n\nStart the assessment: ${link}`,
+    // cv.ts wraps these in the firm frame (_brand.ts) — kept out of here so this file stays import-free.
+    text: body,
+    button: { label: 'Start the assessment', url: link },
+    note: 'You are receiving this because you applied for articleship at A B H L &amp; Associates.',
+  };
 }
 
 export function resultMail(c: { name?: unknown; email?: unknown }, t: { minutes: number; late: boolean }) {
