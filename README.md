@@ -58,6 +58,7 @@ Set these in Vercel → Settings → Environment Variables. See `.env.example`.
 | `SARVAM_API_KEY` | The bot's voice. From [dashboard.sarvam.ai](https://dashboard.sarvam.ai). Free trial credits, then billed per character. If missing, the app falls back to the browser's own voice. |
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | The firm's central Gmail. See [Gmail](#gmail) below. |
 | `GMAIL_PUSH_TOPIC` / `GMAIL_PUSH_SECRET` / `FIREBASE_SA_KEY` | Optional. Gmail push. See [Gmail push](#gmail-push-optional--mail-lands-within-seconds-app-open-or-not). |
+| `TALLY_SIGNING_SECRET` / `HIRING_SECRET` / `HIRING_TEST_TO` / `HIRING_LIVE` / `HIRING_NOTIFY_TO` | Hiring test invites. See [Hiring](#hiring--cv-form--timed-test). Also needs `FIREBASE_SA_KEY`. |
 | `FIREBASE_PROJECT_IDS` | Comma-separated project ids whose users may call the bot. Tokens from anywhere else get a 401. |
 | `ALLOWED_ORIGINS` | Comma-separated sites allowed to call this from a browser. Everything else is blocked by CORS. |
 
@@ -187,6 +188,25 @@ Setup — everything in the SAME Google Cloud project as the OAuth client above:
    mailbox a test mail and Vercel logs show `[gmail-push] … created=1`.
 
 To switch push off: delete the three variables and redeploy. The app just polls.
+
+## Hiring — CV form → timed test
+
+`api/hiring/` (rules in `_lib.ts`, test: `npm test`). One Firestore doc per
+candidate in `candidates/{token}`, token = HMAC(`HIRING_SECRET`, email).
+
+1. **`/api/hiring/cv`** — Tally webhook on the CV form (`X5xgQd`). Saves the
+   candidate and mails them a start link. Same email twice → one mail only.
+2. **`/api/hiring/start?t=…`** — the link in that mail. First click stamps
+   `startedAt` and redirects to the test form (`bZ5bN1`) with `t` + `deadline`
+   as hidden fields. Later clicks keep the first time.
+3. **`/api/hiring/submit`** — Tally webhook on the test form. Stamps
+   `minutesTaken` + `late` (over 60 min) and mails `HIRING_NOTIFY_TO`.
+
+Safety switch: until `HIRING_LIVE=true`, every candidate mail goes to
+`HIRING_TEST_TO` instead, subject tagged `[TEST → real@address]`.
+
+Setup: in each Tally form → Integrations → Webhooks, add the URL above with
+the same signing secret as `TALLY_SIGNING_SECRET`. Answers stay in Tally.
 
 ## Changing a key
 

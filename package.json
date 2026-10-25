@@ -4,7 +4,8 @@
   "private": true,
   "description": "Gemini proxy for the ABHL Associates in-app assistant. Verifies Firebase ID tokens, holds the API key, forwards to Google. Never touches Firestore.",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node api/hiring/_lib.test.ts"
   },
   "dependencies": {
     "jose": "^5.9.6"
