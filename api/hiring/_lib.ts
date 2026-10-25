@@ -10,8 +10,6 @@
 // candidate (or a Tally retry) can never get a second clock or a second mail.
 // ---------------------------------------------------------------------------
 
-import { brandedHtml } from '../_brand.ts';
-
 export const TEST_FORM_URL = 'https://tally.so/r/bZ5bN1';
 export const TEST_MINUTES = 60;
 export const COLLECTION = 'candidates';
@@ -98,7 +96,7 @@ export function recipient(real: string, env: { HIRING_LIVE?: string; HIRING_TEST
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-// Body + button only: the firm frame (logo, address, footer) comes from _brand.ts.
+// Body + button only: the firm frame (logo, address, footer) is added by cv.ts.
 export function inviteMail(name: string, link: string) {
   const first = name.split(/\s+/)[0] || 'there';
   const body = [
@@ -110,10 +108,10 @@ export function inviteMail(name: string, link: string) {
   return {
     subject: 'ABHL & Associates – Articleship Assessment',
     body: `${body}\n\nStart the assessment: ${link}`,
-    html: brandedHtml(body, {
-      button: { label: 'Start the assessment', url: link },
-      note: 'You are receiving this because you applied for articleship at A B H L &amp; Associates.',
-    }),
+    // cv.ts wraps these in the firm frame (_brand.ts) — kept out of here so this file stays import-free.
+    text: body,
+    button: { label: 'Start the assessment', url: link },
+    note: 'You are receiving this because you applied for articleship at A B H L &amp; Associates.',
   };
 }
 

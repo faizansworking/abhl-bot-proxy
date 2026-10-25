@@ -3,6 +3,7 @@
 // 5xx when Gmail/Firestore failed so Tally retries.
 
 import { accessToken, send } from '../_gmail';
+import { brandedHtml } from '../_brand';
 import { createDoc, mergeDoc, readDoc } from '../_firestore';
 import { COLLECTION, field, inviteMail, recipient, signatureOk, tokenFor } from './_lib';
 
@@ -35,7 +36,8 @@ export default async function handler(req: Request): Promise<Response> {
     const link = `${new URL(req.url).origin}/api/hiring/start?t=${token}`;
     const mail = inviteMail(name, link);
     const { to, tag } = recipient(email, process.env);
-    await send({ to, subject: tag + mail.subject, body: mail.body, html: mail.html }, await accessToken());
+    const html = brandedHtml(mail.text, { button: mail.button, note: mail.note });
+    await send({ to, subject: tag + mail.subject, body: mail.body, html }, await accessToken());
     await mergeDoc(COLLECTION, token, { invitedAt: new Date().toISOString() });
     console.log(`[hiring/cv] invited ${token} to=${to}`);
     return new Response('Invited', { status: 200 });
