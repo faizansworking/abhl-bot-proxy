@@ -5,13 +5,13 @@
 // ---------------------------------------------------------------------------
 // Staff write only the message text (+ an optional button). Logo, header,
 // colours and the address footer are fixed HERE, so every mail looks the same.
-// To change the logo or address, edit this file (and public/abhl-logo.jpg).
+// To change the logo or address, edit this file (and public/abhl-logo-mail.png).
 // Gmail blocks data: images, so the logo is a hosted URL on the app's own site.
 // Email clients ignore custom fonts and many CSS tricks: layout is tables,
 // the "button" is a link in a rounded cell, colours are plain hex.
 // ---------------------------------------------------------------------------
 
-const LOGO_URL = 'https://abhl-timesheet.web.app/abhl-logo.jpg';
+const LOGO_URL = 'https://abhl-timesheet.web.app/abhl-logo-mail.png';
 const NAVY = '#1f285f';
 const TEAL = '#28a6a3'; // links in the message
 const INK = '#2b3340';
