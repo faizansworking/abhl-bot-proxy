@@ -90,16 +90,19 @@ function splitAddresses(raw: string): string[] {
     .filter(Boolean);
 }
 
-// Attachment names live on the parts tree; a real attachment is any part that
-// carries a filename. Inline images in signatures come along too — they are
-// small and honest, and filtering by mime would drop a client's photo of a
-// challan.
-function attachmentsOf(part: any, out: { name: string; size: number }[] = []) {
-  if (!part) return out;
-  if (part.filename) out.push({ name: String(part.filename), size: Number(part.body?.size ?? 0) });
-  for (const p of part.parts ?? []) attachmentsOf(p, out);
+// The MIME parts tree, flattened (root first) so every reader is a .find/.filter.
+const parts = (p: any, out: any[] = []): any[] => {
+  if (p) { out.push(p); for (const c of p.parts ?? []) parts(c, out); }
   return out;
-}
+};
+const cidOf = (p: any): string | undefined =>
+  (p.headers ?? []).find((h: any) => h.name.toLowerCase() === 'content-id')?.value?.replace(/[<>]/g, '');
+
+// A real attachment is any part that carries a filename. Inline images in
+// signatures come along too — they are small and honest, and filtering by
+// mime would drop a client's photo of a challan.
+const attachmentsOf = (payload: any) =>
+  parts(payload).filter((p) => p.filename).map((p) => ({ name: String(p.filename), size: Number(p.body?.size ?? 0) }));
 
 function toMeta(msg: any): MailMeta | null {
   const labels: string[] = msg.labelIds ?? [];
@@ -158,33 +161,31 @@ export async function search(q: string, token: string): Promise<MailMeta[]> {
   return fetchMessages((list.messages ?? []).map((m: any) => String(m.id)), token);
 }
 
+// Message ids added since Gmail's change cursor, plus the cursor to hold next.
+// null when Gmail has forgotten the cursor (they expire after about a week).
+export async function historySince(historyId: string, token: string): Promise<{ ids: string[]; newest: string } | null> {
+  const ids = new Set<string>();
+  let newest = historyId;
+  let pageToken = '';
+  for (let page = 0; page < 10; page++) {
+    const q = new URLSearchParams({ startHistoryId: historyId, historyTypes: 'messageAdded', maxResults: '500' });
+    if (pageToken) q.set('pageToken', pageToken);
+    const data = await gmail(`/history?${q}`, token);
+    if (data.__notFound) return null;
+    if (data.historyId) newest = String(data.historyId);
+    for (const h of data.history ?? []) for (const a of h.messagesAdded ?? []) if (a.message?.id) ids.add(a.message.id);
+    pageToken = data.nextPageToken ?? '';
+    if (!pageToken) break;
+  }
+  return { ids: [...ids], newest };
+}
+
 export async function sync(historyId: string, days: number, token: string) {
   // --- incremental: what changed since the cursor ------------------------
-  if (historyId) {
-    const ids = new Set<string>();
-    let pageToken = '';
-    let newest = historyId;
-    let ok = true;
-    for (let page = 0; page < 10; page++) {
-      const q = new URLSearchParams({
-        startHistoryId: historyId,
-        historyTypes: 'messageAdded',
-        maxResults: '500',
-      });
-      if (pageToken) q.set('pageToken', pageToken);
-      const data = await gmail(`/history?${q}`, token);
-      if (data.__notFound) { ok = false; break; } // cursor too old — fall through
-      if (data.historyId) newest = String(data.historyId);
-      for (const h of data.history ?? []) {
-        for (const a of h.messagesAdded ?? []) if (a.message?.id) ids.add(a.message.id);
-      }
-      pageToken = data.nextPageToken ?? '';
-      if (!pageToken) break;
-    }
-    if (ok) {
-      const messages = await fetchMessages([...ids].slice(0, MAX_MESSAGES), token);
-      return { historyId: newest, messages, full: false };
-    }
+  const since = historyId ? await historySince(historyId, token) : null;
+  if (since) {
+    const messages = await fetchMessages(since.ids.slice(0, MAX_MESSAGES), token);
+    return { historyId: since.newest, messages, full: false };
   }
 
   // --- full: the newest mail of the last N days --------------------------
@@ -291,46 +292,30 @@ const dec = (d: string) => {
 };
 const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function findPart(part: any, mime: string): any {
-  if (!part) return null;
-  if (part.mimeType === mime && part.body?.data) return part;
-  for (const p of part.parts ?? []) { const f = findPart(p, mime); if (f) return f; }
-  return null;
-}
-function inlineParts(part: any, out: any[] = []): any[] {
-  if (!part) return out;
-  const cid = (part.headers ?? []).find((h: any) => h.name.toLowerCase() === 'content-id')?.value;
-  if (cid && part.body?.attachmentId && String(part.mimeType).startsWith('image/')) out.push({ cid: cid.replace(/[<>]/g, ''), part });
-  for (const p of part.parts ?? []) inlineParts(p, out);
-  return out;
-}
-
 export async function read(id: string, token: string): Promise<{ html: string; attachments: { name: string; mime: string; size: number; attachmentId: string }[] }> {
   const msg = await gmail(`/messages/${encodeURIComponent(id)}?format=full`, token);
   if (msg.__notFound) throw new Error('That mail is no longer in Gmail');
-  const h = findPart(msg.payload, 'text/html');
-  const t = findPart(msg.payload, 'text/plain');
+  const all = parts(msg.payload);
+  const findPart = (mime: string) => all.find((p) => p.mimeType === mime && p.body?.data);
+  const h = findPart('text/html');
+  const t = findPart('text/plain');
+  const rawHtml = h ? dec(h.body.data) : '';
   let html = h
-    ? dec(h.body.data)
+    ? rawHtml
     : `<div style="white-space:pre-wrap;font-family:Arial,sans-serif;font-size:14px">${esc(t ? dec(t.body.data) : String(msg.snippet ?? ''))}</div>`;
+  const isInlineImage = (p: any) => cidOf(p) && p.body?.attachmentId && String(p.mimeType).startsWith('image/');
   // Pictures embedded in the mail (cid:) only exist inside Gmail — inline them
   // as data: URIs so the signature logo shows. Capped, so one mail can't balloon.
-  for (const { cid, part } of inlineParts(msg.payload).slice(0, 8)) {
+  for (const part of all.filter(isInlineImage).slice(0, 8)) {
+    const cid = cidOf(part);
     if (!html.includes(`cid:${cid}`) || Number(part.body.size) > 400_000) continue;
     const a = await gmail(`/messages/${encodeURIComponent(id)}/attachments/${part.body.attachmentId}`, token);
     if (a.data) html = html.split(`cid:${cid}`).join(`data:${part.mimeType};base64,${a.data.replace(/-/g, '+').replace(/_/g, '/')}`);
   }
   // Real attachments; pictures already drawn inside the mail (cid) are skipped.
-  const attachments: { name: string; mime: string; size: number; attachmentId: string }[] = [];
-  const walk = (p: any) => {
-    if (!p) return;
-    const cid = (p.headers ?? []).find((h: any) => h.name.toLowerCase() === 'content-id')?.value?.replace(/[<>]/g, '');
-    const drawn = cid && String(p.mimeType).startsWith('image/') && (h?.body?.data ? dec(h.body.data) : '').includes(`cid:${cid}`);
-    if (p.filename && p.body?.attachmentId && !drawn)
-      attachments.push({ name: String(p.filename), mime: String(p.mimeType ?? ''), size: Number(p.body.size ?? 0), attachmentId: String(p.body.attachmentId) });
-    for (const c of p.parts ?? []) walk(c);
-  };
-  walk(msg.payload);
+  const attachments = all
+    .filter((p) => p.filename && p.body?.attachmentId && !(isInlineImage(p) && rawHtml.includes(`cid:${cidOf(p)}`)))
+    .map((p) => ({ name: String(p.filename), mime: String(p.mimeType ?? ''), size: Number(p.body.size ?? 0), attachmentId: String(p.body.attachmentId) }));
   return { html, attachments };
 }
 

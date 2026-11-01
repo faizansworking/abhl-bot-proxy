@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/gemini/(.*)",
-      "destination": "/api/gemini?path=$1"
+      "destination": "/api/llm?path=gemini/$1"
     },
     {
       "source": "/api/llm/(.*)",

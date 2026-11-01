@@ -74,6 +74,8 @@ export default async function handler(req: Request): Promise<Response> {
       result = await send(body, token);
       console.log(`[gmail] send uid=${caller.uid} to=${String(body.to ?? '').slice(0, 60)}`);
     } else {
+      // TODO(bug): watch() is never dispatched; the app's daily { action: 'watch' }
+      // lands here as 400, so the Gmail watch is never renewed — see audit.
       return fail('Unknown action: use "sync" or "send"', 400, cors);
     }
     return new Response(JSON.stringify(result), {

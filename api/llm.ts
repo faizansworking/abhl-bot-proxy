@@ -1,16 +1,14 @@
 // ---------------------------------------------------------------------------
 // ABHL assistant — one door for every OpenAI-compatible model provider
 // ---------------------------------------------------------------------------
-// Groq, Cerebras, Mistral and most of the rest all speak the SAME dialect as
-// OpenAI: POST /chat/completions, same body, same reply. So they do not need a
-// file each — they need one route and a lookup table.
-//
-// (Gemini keeps its own route, api/gemini.ts, because Google's format is
-// genuinely different. Two shapes, two routes, not five.)
+// Every provider is "verify the caller, swap in the key, forward the body":
+// Groq, Cerebras, Mistral speak OpenAI's dialect; Gemini has its own paths and
+// its own auth header, but the proxying is the same. One route, one table.
 //
 // Called as /api/llm/<provider>/<path>, e.g. /api/llm/groq/chat/completions.
-// vercel.json rewrites that into ?path=..., the same trick api/gemini.ts uses
-// and for the same reason: filesystem catch-all routing is what 404'd before.
+// vercel.json rewrites that into ?path=... (filesystem catch-all routing is
+// what 404'd before). /api/gemini/<path> is a rewrite alias for
+// /api/llm/gemini/<path>, because the app's default baseURL points there.
 //
 // A provider that is not in the table below, or whose key is not set in Vercel,
 // is refused here. The browser cannot reach an arbitrary URL through this.
@@ -23,31 +21,23 @@ export const config = { runtime: 'edge' };
 interface Provider {
   base: string;
   env: string;
-  /** Shown in errors and logs. Also a reminder of what we signed up to. */
-  note: string;
+  /** Auth header carrying the bare key; default is `authorization: Bearer`. */
+  header?: string;
 }
 
 const PROVIDERS: Record<string, Provider> = {
-  groq: {
-    base: 'https://api.groq.com/openai/v1',
-    env: 'GROQ_API_KEY',
-    note: '30 req/min, 1k req/day — the best per-MINUTE headroom we have',
-  },
-  cerebras: {
-    base: 'https://api.cerebras.ai/v1',
-    env: 'CEREBRAS_API_KEY',
-    note: '~1M tokens/day — the volume option, for when the whole firm uses it',
-  },
+  // Free tier, no card. Google's own request format (the AI SDK handles it).
+  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta', env: 'GEMINI_API_KEY', header: 'x-goog-api-key' },
+  // 30 req/min, 1k req/day — the best per-MINUTE headroom we have.
+  groq: { base: 'https://api.groq.com/openai/v1', env: 'GROQ_API_KEY' },
+  // ~1M tokens/day — the volume option, for when the whole firm uses it.
+  cerebras: { base: 'https://api.cerebras.ai/v1', env: 'CEREBRAS_API_KEY' },
   // WARNING, and it is not a small one: Mistral's free tier trains on your
   // inputs unless you opt out in their Admin Console → Privacy, and it allows
   // only ~2 requests a MINUTE. Questions here carry client names and amounts.
   // It is wired up because it was asked for, but it is last in the order in
   // src/assistant/models.ts, and it should stay there.
-  mistral: {
-    base: 'https://api.mistral.ai/v1',
-    env: 'MISTRAL_API_KEY',
-    note: '2 req/min, TRAINS ON INPUT unless opted out — last resort only',
-  },
+  mistral: { base: 'https://api.mistral.ai/v1', env: 'MISTRAL_API_KEY' },
 };
 
 export default async function handler(req: Request): Promise<Response> {
@@ -97,7 +87,7 @@ export default async function handler(req: Request): Promise<Response> {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${apiKey}`,
+        [provider.header ?? 'authorization']: provider.header ? apiKey : `Bearer ${apiKey}`,
       },
       body: req.body,
       // Required when streaming a request body through fetch.

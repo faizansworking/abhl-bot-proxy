@@ -26,7 +26,7 @@
 // can never help.
 // ---------------------------------------------------------------------------
 
-import { accessToken, fetchMessages, gmail, type MailMeta } from './_gmail';
+import { accessToken, fetchMessages, gmail, historySince, type MailMeta } from './_gmail';
 import { createDoc, mergeDoc, readDoc } from './_firestore';
 
 export const config = { runtime: 'edge' };
@@ -37,51 +37,10 @@ const CURSOR = { collection: 'system', id: 'mailPush' };
 const CATCH_UP = 25;
 
 // India: the app files a mail under the LOCAL day it arrived (the Day-book
-// convention). Edge functions run in UTC, so the offset is applied by hand.
-const IST_OFFSET_MS = 5.5 * 3600_000;
-function istDay(iso: string): string {
-  const d = new Date(new Date(iso).getTime() + IST_OFFSET_MS);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
-}
+// convention). Edge functions run in UTC; en-CA yields YYYY-MM-DD.
+const istDay = (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
-function toRow(m: MailMeta) {
-  return {
-    id: m.id,
-    threadId: m.threadId,
-    historyId: m.historyId,
-    at: m.at,
-    day: istDay(m.at),
-    dir: m.dir,
-    from: m.from,
-    fromName: m.fromName,
-    to: m.to,
-    cc: m.cc,
-    subject: m.subject,
-    snippet: m.snippet,
-    attachments: m.attachments,
-    messageIdHeader: m.messageIdHeader,
-    syncedAt: new Date().toISOString(),
-    source: 'push',
-  };
-}
-
-async function idsSince(historyId: string, token: string): Promise<{ ids: string[]; newest: string } | null> {
-  const ids = new Set<string>();
-  let newest = historyId;
-  let pageToken = '';
-  for (let page = 0; page < 10; page++) {
-    const q = new URLSearchParams({ startHistoryId: historyId, historyTypes: 'messageAdded', maxResults: '500' });
-    if (pageToken) q.set('pageToken', pageToken);
-    const data = await gmail(`/history?${q}`, token);
-    if (data.__notFound) return null; // Gmail forgot this cursor
-    if (data.historyId) newest = String(data.historyId);
-    for (const h of data.history ?? []) for (const a of h.messagesAdded ?? []) if (a.message?.id) ids.add(a.message.id);
-    pageToken = data.nextPageToken ?? '';
-    if (!pageToken) break;
-  }
-  return { ids: [...ids], newest };
-}
+const toRow = (m: MailMeta) => ({ ...m, day: istDay(m.at), syncedAt: new Date().toISOString(), source: 'push' });
 
 export default async function handler(req: Request): Promise<Response> {
   if (req.method !== 'POST') return new Response('POST only', { status: 405 });
@@ -107,7 +66,7 @@ export default async function handler(req: Request): Promise<Response> {
 
     let metas: MailMeta[];
     let newest: string;
-    const since = start ? await idsSince(start, token) : null;
+    const since = start ? await historySince(start, token) : null;
     if (since) {
       metas = await fetchMessages(since.ids.slice(0, 100), token);
       newest = since.newest;
