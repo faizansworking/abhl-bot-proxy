@@ -72,6 +72,8 @@ export async function verifyCaller(
   const header = req.headers.get('authorization') ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) return { error: fail('Missing Firebase ID token', 401, cors) };
+  let uid = '';
+  let project = '';
 
   try {
     // jwtVerify checks the signature and expiry; we check who it was issued to.
@@ -84,11 +86,26 @@ export async function verifyCaller(
       throw new Error('unexpected issuer');
     }
     if (!payload.sub) throw new Error('token has no subject');
-    return { uid: String(payload.sub) };
+    uid = String(payload.sub);
+    project = audience;
   } catch (err) {
     return { error: fail(`Not signed in: ${(err as Error).message}`, 401, cors) };
   }
+  // A valid token only proves someone signed up. Anyone can sign up from the login
+  // screen, so also require an APPROVED staff profile (users/{uid}, read with their
+  // own token so Firestore rules apply) — same test as the app's rules and the files server.
+  if ((approvedUntil.get(uid) ?? 0) < Date.now()) {
+    const r = await fetch(`https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/users/${encodeURIComponent(uid)}`,
+      { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
+    if (!r?.ok) return { error: fail('No staff profile for this account', 403, cors) };
+    const f = ((await r.json()) as { fields?: Record<string, { booleanValue?: boolean }> }).fields ?? {};
+    if (f.approved?.booleanValue === false) return { error: fail('Account not approved yet', 403, cors) };
+    approvedUntil.set(uid, Date.now() + 5 * 60_000);
+  }
+  return { uid };
 }
+// ponytail: per-instance cache (5 min), cold starts re-check; that is the whole cost.
+const approvedUntil = new Map<string, number>();
 
 /** Standard preflight + method guard. Returns a Response only if we should stop. */
 export function guardMethod(
