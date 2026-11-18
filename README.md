@@ -1,7 +1,7 @@
 # ABHL bot proxy
 
 The server-side half of the ABHL Associates in-app assistant. It is deliberately
-tiny: **two routes, one job each — hold a key, check who's asking.**
+tiny: **one job per route — hold a key, check who's asking.**
 
 ```
 Browser (ABHL app on Firebase Hosting)
@@ -11,10 +11,19 @@ Browser (ABHL app on Firebase Hosting)
 THIS PROXY  (Vercel)
   │  verifies the token against Google's PUBLIC keys   (api/_shared.ts)
   │
-  ├─ /api/gemini  → adds GEMINI_API_KEY → Google Gemini      (thinking)
-  ├─ /api/sarvam  → adds SARVAM_API_KEY → Sarvam AI          (voice)
-  └─ /api/gmail   → adds the central Gmail token → Gmail API (client mail)
+  ├─ /api/llm/<provider>/<path> → adds that provider's key → gemini | groq | cerebras | mistral  (thinking)
+  │     /api/gemini/<path> is a vercel.json rewrite alias of /api/llm/gemini/<path>
+  ├─ /api/gmail        → adds the central Gmail token → Gmail API   (client mail)
+  ├─ /api/gmail-setup  → one-time browser page to mint the Gmail refresh token
+  ├─ /api/gmail-push   → optional, Pub/Sub → Firestore `mails` (the one Firestore writer)
+  ├─ /api/health       → which env vars are set (never their values)
+  └─ /api/sarvam       → adds SARVAM_API_KEY → Sarvam TTS. UNUSED by the app today:
+                         the bot speaks with the browser's own speechSynthesis.
 ```
+
+Routes are the files in `api/` (`_*.ts` are shared modules, not routes). The old
+`api/gemini.ts` is archived in `archive/api/`; the alias in `vercel.json` keeps the
+app's default `baseURL` working.
 
 ## Why it exists
 
@@ -25,8 +34,8 @@ smallest possible place to keep it.
 ## What it deliberately does not do
 
 **It never touches Firestore for the assistant, and the assistant has no service-account key.** (The optional Gmail push endpoint is the one narrow exception — a create-only writer with a Datastore-User-only key; see that section.)
-That is a design decision, not an omission — see `BOT-SESSION-BRIEF.md` §2 in the
-app repo, which recommends the opposite, and the reasoning we chose instead:
+That is a design decision, not an omission — see `docs/history/BOT-SESSION-BRIEF.md` §2
+in the app repo, which recommends the opposite, and the reasoning we chose instead:
 
 - The app's `firestore.rules` are role-based. The Firebase Admin SDK **bypasses
   them entirely**, so a server-side tool layer would have to re-implement every
@@ -55,7 +64,8 @@ Set these in Vercel → Settings → Environment Variables. See `.env.example`.
 | Variable | Purpose |
 |---|---|
 | `GEMINI_API_KEY` | From [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Free tier, no card. |
-| `SARVAM_API_KEY` | The bot's voice. From [dashboard.sarvam.ai](https://dashboard.sarvam.ai). Free trial credits, then billed per character. If missing, the app falls back to the browser's own voice. |
+| `SARVAM_API_KEY` | Sarvam TTS for `/api/sarvam`. **Currently unused** — the app speaks with the browser's own voice. From [dashboard.sarvam.ai](https://dashboard.sarvam.ai), billed per character. |
+| `GROQ_API_KEY` / `CEREBRAS_API_KEY` / `MISTRAL_API_KEY` | Optional extra `/api/llm` providers. A provider whose key is missing is refused. |
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | The firm's central Gmail. See [Gmail](#gmail) below. |
 | `GMAIL_PUSH_TOPIC` / `GMAIL_PUSH_SECRET` / `FIREBASE_SA_KEY` | Optional. Gmail push. See [Gmail push](#gmail-push-optional--mail-lands-within-seconds-app-open-or-not). |
 | `TALLY_SIGNING_SECRET` / `HIRING_SECRET` / `HIRING_TEST_TO` / `HIRING_LIVE` / `HIRING_NOTIFY_TO` | Hiring test invites. See [Hiring](#hiring--cv-form--timed-test). Also needs `FIREBASE_SA_KEY`. |
@@ -67,18 +77,39 @@ Set these in Vercel → Settings → Environment Variables. See `.env.example`.
 
 ## Endpoints
 
-### `/api/gemini/<google-api-path>` — thinking
+### `/api/llm/<provider>/<path>` — thinking
 
 ```
-POST https://<your-project>.vercel.app/api/gemini/models/<model>:generateContent
+POST https://<your-project>.vercel.app/api/llm/gemini/models/<model>:generateContent
+POST https://<your-project>.vercel.app/api/llm/groq/chat/completions
 Authorization: Bearer <firebase id token>
 ```
 
-The path is passed straight through to `https://generativelanguage.googleapis.com/v1beta`,
-so the app can point the Vercel AI SDK's `baseURL` at `/api/gemini` and model
-selection, streaming and tool calling all work unchanged.
+One route for every provider (`PROVIDERS` table in `api/llm.ts`): `gemini`
+(Google's own format, `GEMINI_API_KEY`), `groq`, `cerebras`, `mistral` (OpenAI
+dialect, their own keys). The path is passed straight through to the provider's
+base URL, so the app can point the Vercel AI SDK's `baseURL` at
+`/api/llm/<provider>` and model selection, streaming and tool calling all work
+unchanged. A provider not in the table, or whose key is not set, is refused.
 
-### `/api/sarvam` — voice
+`/api/gemini/<path>` is a `vercel.json` rewrite to `/api/llm/gemini/<path>` —
+kept because the app's default `baseURL` points there. `api/gemini.ts` itself
+is archived (`archive/api/`).
+
+### `/api/health` — diagnostics
+
+Open in a browser. Reports `set` / `MISSING` for every env var, never a value.
+
+### `/api/gmail-setup` — one-time Gmail connect
+
+Browser page: sign in as the central mailbox, get the refresh token to paste
+into Vercel. Steps under [Gmail](#gmail).
+
+### `/api/sarvam` — voice (currently unused)
+
+**The app does not call this today** — the bot speaks with the browser's own
+`speechSynthesis`. The route still works and is kept for when a better voice
+is worth paying for.
 
 ```
 POST https://<your-project>.vercel.app/api/sarvam
@@ -256,7 +287,9 @@ npx vercel --prod
 
 ## Related
 
-- App repo: `Timesheet-app-mainV3/Timesheet-app-main` (Vite + React, Firebase Hosting)
-- `BOT-SESSION-BRIEF.md` in the app repo — original brief; §3 (task document shape)
-  is authoritative for any write tool, §2 (server-side Admin) is superseded by this
-  README.
+- App repo: `C:\Faizan\ABHL Timesheet\Timesheet-app` — GitHub
+  [faizansworking/Timesheet-app](https://github.com/faizansworking/Timesheet-app)
+  (Vite + React, Firebase Hosting). Setup + deploy for both repos: `docs/SETUP.md` there.
+- `docs/history/BOT-SESSION-BRIEF.md` in the app repo — original brief; §3 (task
+  document shape) is authoritative for any write tool, §2 (server-side Admin) is
+  superseded by this README.

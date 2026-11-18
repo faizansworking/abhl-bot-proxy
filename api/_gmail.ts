@@ -131,11 +131,16 @@ function toMeta(msg: any): MailMeta | null {
 
 // Fetch N messages a few at a time. The whole document (body included) comes
 // down to this function and only the metadata goes out — see the header note.
+// Any real failure (quota, 5xx) fails the WHOLE call: skipping the mail and
+// handing back a newer cursor would lose it for good, because the next sync
+// starts after it. Failing keeps the old cursor, so the next run retries.
+// The queue is dropped on the first failure — no point spending more quota.
 export async function fetchMessages(ids: string[], token: string): Promise<MailMeta[]> {
   const out: MailMeta[] = [];
   const queue = [...ids];
+  let failed: Error | null = null;
   const worker = async () => {
-    while (queue.length) {
+    while (queue.length && !failed) {
       const id = queue.shift()!;
       try {
         const msg = await gmail(`/messages/${id}?format=full`, token);
@@ -143,20 +148,22 @@ export async function fetchMessages(ids: string[], token: string): Promise<MailM
         const meta = toMeta(msg);
         if (meta) out.push(meta);
       } catch (err) {
-        console.warn(`[gmail] message ${id} skipped: ${(err as Error).message}`);
+        failed = failed ?? (err as Error);
       }
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  if (failed) throw failed;
   return out.sort((a, b) => (a.at < b.at ? 1 : -1));
 }
 
 // Gmail's own search (the same syntax as its search box: "from:x has:attachment
 // TDS notice"). Gmail already indexes every mail, so nothing is stored by us.
-export async function search(q: string, token: string): Promise<MailMeta[]> {
+export async function search(q: string, token: string, max = 30): Promise<MailMeta[]> {
   const text = q.trim().slice(0, 200);
   if (!text) return [];
-  const params = new URLSearchParams({ maxResults: '30', q: `${text} -in:spam -in:trash -in:draft` });
+  const n = Math.min(30, Math.max(1, Math.floor(max) || 30)); // 5 quota units per mail fetched
+  const params = new URLSearchParams({ maxResults: String(n), q: `${text} -in:spam -in:trash -in:draft` });
   const list = await gmail(`/messages?${params}`, token);
   return fetchMessages((list.messages ?? []).map((m: any) => String(m.id)), token);
 }
@@ -324,4 +331,33 @@ export async function attachment(id: string, attachmentId: string, token: string
   const a = await gmail(`/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}`, token);
   if (a.__notFound || !a.data) throw new Error('Attachment not found');
   return { data: String(a.data).replace(/-/g, '+').replace(/_/g, '/') };
+}
+
+
+// --- the shared Gmail's drafts (the app's Drafts tab shows them beside its own) ---
+// Listing needs only gmail.readonly; deleting one needs gmail.compose (added to the
+// setup scopes 16 Nov 2026 — until the connection is redone, Delete says so).
+export interface GmailDraft { id: string; messageId: string; threadId: string; to: string; cc: string; subject: string; snippet: string; at: string; files: string[] }
+export async function drafts(token: string, max = 50): Promise<GmailDraft[]> {
+  const list = await gmail(`/drafts?maxResults=${Math.min(100, max)}`, token);
+  const out: GmailDraft[] = [];
+  for (const d of list.drafts ?? []) {
+    const full = await gmail(`/drafts/${encodeURIComponent(d.id)}?format=full`, token);
+    if (full.__notFound) continue;
+    const m = full.message ?? {};
+    const h = (n: string) => String((m.payload?.headers ?? []).find((x: any) => x.name.toLowerCase() === n)?.value ?? '');
+    out.push({
+      id: String(d.id), messageId: String(m.id), threadId: String(m.threadId ?? ''),
+      to: h('to'), cc: h('cc'), subject: h('subject'), snippet: String(m.snippet ?? ''),
+      at: new Date(Number(m.internalDate ?? Date.now())).toISOString(),
+      files: parts(m.payload).filter((p) => p.filename && p.body?.attachmentId).map((p) => String(p.filename)),
+    });
+  }
+  return out;
+}
+export async function deleteDraft(id: string, token: string) {
+  const res = await fetch(`${GMAIL}/drafts/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+  if (res.status === 403) throw new Error('Reconnect Gmail once (/api/gmail-setup) to let the app delete Gmail drafts');
+  if (!res.ok && res.status !== 404) throw new Error(`Gmail draft delete failed: ${res.status}`);
+  return { ok: true };
 }

@@ -20,6 +20,7 @@ export const config = { runtime: 'edge' };
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.compose', // delete Gmail drafts from the app's Drafts tab
 ].join(' ');
 
 const page = (title: string, body: string, status = 200) =>

@@ -33,10 +33,11 @@
 // ---------------------------------------------------------------------------
 
 import { corsHeaders, fail, guardMethod, verifyCaller } from './_shared';
-import { accessToken, DEFAULT_DAYS, attachment, read, search, send, sync, watch } from './_gmail';
+import { accessToken, DEFAULT_DAYS, attachment, deleteDraft, drafts, read, search, send, sync, watch } from './_gmail';
 
 export const config = { runtime: 'edge' };
-// --- the door -----------------------------------------------------------------
+
+// --- the door -----------------------------------------------------------------
 
 export default async function handler(req: Request): Promise<Response> {
   const cors = corsHeaders(req.headers.get('origin'));
@@ -67,9 +68,13 @@ export default async function handler(req: Request): Promise<Response> {
     } else if (body?.action === 'read') {
       result = await read(String(body.id ?? ''), token);
     } else if (body?.action === 'search') {
-      result = { messages: await search(String(body.q ?? ''), token) };
+      result = { messages: await search(String(body.q ?? ''), token, Number(body.max ?? 30)) };
     } else if (body?.action === 'attachment') {
       result = await attachment(String(body.id ?? ''), String(body.attachmentId ?? ''), token);
+    } else if (body?.action === 'drafts') {
+      result = { drafts: await drafts(token) };
+    } else if (body?.action === 'draftDelete') {
+      result = await deleteDraft(String(body.id ?? ''), token);
     } else if (body?.action === 'send') {
       result = await send(body, token);
       console.log(`[gmail] send uid=${caller.uid} to=${String(body.to ?? '').slice(0, 60)}`);
