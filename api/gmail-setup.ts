@@ -21,6 +21,8 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.compose', // delete Gmail drafts from the app's Drafts tab
+  'https://www.googleapis.com/auth/contacts.readonly', // compose To suggestions: saved contacts
+  'https://www.googleapis.com/auth/contacts.other.readonly', // ...and everyone Gmail auto-saved from mail
 ].join(' ');
 
 const page = (title: string, body: string, status = 200) =>

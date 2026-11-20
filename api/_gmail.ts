@@ -361,3 +361,56 @@ export async function deleteDraft(id: string, token: string) {
   if (!res.ok && res.status !== 404) throw new Error(`Gmail draft delete failed: ${res.status}`);
   return { ok: true };
 }
+
+// --- address book for the app's compose To box ---------------------------------
+// Google Contacts + "Other contacts" (everyone Gmail auto-saved from mail) + the
+// From/To/Cc of the newest mails. The People API needs contacts.readonly and
+// contacts.other.readonly (setup scopes, 20 Nov 2026); until Gmail is reconnected
+// those two fail quietly and only the mail scan answers.
+export interface Person { name: string; email: string }
+const PEOPLE = 'https://people.googleapis.com/v1';
+async function peoplePages(path: string, key: string, token: string): Promise<Person[]> {
+  const out: Person[] = [];
+  let pageToken = '';
+  for (let i = 0; i < 5; i++) { // ponytail: 5 000 per list; raise if the firm ever has more
+    const res = await fetch(`${PEOPLE}${path}&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ''}`, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) break; // no scope yet (403) — the mail scan still answers
+    const data: any = await res.json();
+    for (const p of data[key] ?? []) {
+      const name = String(p.names?.[0]?.displayName ?? '');
+      for (const e of p.emailAddresses ?? []) if (e.value) out.push({ name, email: String(e.value).toLowerCase() });
+    }
+    pageToken = data.nextPageToken ?? '';
+    if (!pageToken) break;
+  }
+  return out;
+}
+export async function contacts(token: string, scan = 300): Promise<Person[]> {
+  const fromMail = async () => {
+    const list = await gmail(`/messages?maxResults=${scan}&q=${encodeURIComponent('-in:spam -in:trash -in:chats')}`, token);
+    const ids: string[] = (list.messages ?? []).map((m: any) => String(m.id));
+    const out: Person[] = [];
+    const worker = async () => {
+      while (ids.length) {
+        const m = await gmail(`/messages/${ids.shift()}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc`, token).catch(() => null);
+        for (const h of m?.payload?.headers ?? []) {
+          for (const raw of String(h.value ?? '').split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)) {
+            const a = parseAddress(raw);
+            if (a.email.includes('@')) out.push({ name: a.name.replace(/^"|"$/g, ''), email: a.email });
+          }
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    return out;
+  };
+  const lists = await Promise.all([
+    peoplePages('/people/me/connections?personFields=names,emailAddresses', 'connections', token),
+    peoplePages('/otherContacts?readMask=names,emailAddresses', 'otherContacts', token),
+    fromMail().catch(() => [] as Person[]),
+  ]);
+  // One row per address; a saved contact's name wins over a mail header's.
+  const by = new Map<string, Person>();
+  for (const p of lists.flat()) { const o = by.get(p.email); if (!o || (!o.name && p.name)) by.set(p.email, p); }
+  return [...by.values()];
+}

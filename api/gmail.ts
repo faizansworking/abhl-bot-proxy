@@ -33,7 +33,7 @@
 // ---------------------------------------------------------------------------
 
 import { corsHeaders, fail, guardMethod, verifyCaller } from './_shared';
-import { accessToken, DEFAULT_DAYS, attachment, deleteDraft, drafts, read, search, send, sync, watch } from './_gmail';
+import { accessToken, DEFAULT_DAYS, attachment, contacts, deleteDraft, drafts, read, search, send, sync, watch } from './_gmail';
 
 export const config = { runtime: 'edge' };
 
@@ -73,6 +73,8 @@ export default async function handler(req: Request): Promise<Response> {
       result = await attachment(String(body.id ?? ''), String(body.attachmentId ?? ''), token);
     } else if (body?.action === 'drafts') {
       result = { drafts: await drafts(token) };
+    } else if (body?.action === 'contacts') {
+      result = { people: await contacts(token) };
     } else if (body?.action === 'draftDelete') {
       result = await deleteDraft(String(body.id ?? ''), token);
     } else if (body?.action === 'send') {
