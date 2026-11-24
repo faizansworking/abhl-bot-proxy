@@ -104,10 +104,11 @@ const cidOf = (p: any): string | undefined =>
 const attachmentsOf = (payload: any) =>
   parts(payload).filter((p) => p.filename).map((p) => ({ name: String(p.filename), size: Number(p.body?.size ?? 0) }));
 
-function toMeta(msg: any): MailMeta | null {
+function toMeta(msg: any, keepTrash = false): MailMeta | null {
   const labels: string[] = msg.labelIds ?? [];
   // Drafts, spam and bin are not "mail that came". Chats never were.
-  if (labels.some((l) => l === 'DRAFT' || l === 'SPAM' || l === 'TRASH' || l === 'CHAT')) return null;
+  // (A conversation opened from the app's Trash still shows its binned mail.)
+  if (labels.some((l) => l === 'DRAFT' || l === 'SPAM' || (l === 'TRASH' && !keepTrash) || l === 'CHAT')) return null;
   const headers: { name: string; value: string }[] = msg.payload?.headers ?? [];
   const h = (name: string) =>
     headers.find((x) => x.name.toLowerCase() === name.toLowerCase())?.value ?? '';
@@ -223,6 +224,36 @@ function b64url(s: string): string {
 const encodeHeader = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${btoa(unescape(encodeURIComponent(s)))}?=`);
 
 export async function send(body: any, token: string) {
+  const res = await gmail('/messages/send', token, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(message(body)),
+  });
+  return { id: String(res.id), threadId: String(res.threadId) };
+}
+
+// Undo send / Send later (app: mail/outbox.ts): the mail is saved as a Gmail
+// draft first, then sent by id after 30 s or at the chosen time. Needs gmail.compose.
+export async function draftCreate(body: any, token: string) {
+  const res = await gmail('/drafts', token, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: message(body) }),
+  });
+  return { id: String(res.id), messageId: String(res.message?.id ?? '') };
+}
+export async function draftSend(id: string, token: string) {
+  const res = await gmail('/drafts/send', token, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  if (res.__notFound) throw new Error('That mail was already sent or cancelled');
+  return { id: String(res.id), threadId: String(res.threadId) };
+}
+
+// The raw MIME message (+ thread) that messages.send and drafts.create both take.
+function message(body: any): { raw: string; threadId?: string } {
   const to = String(body.to ?? '').trim();
   const cc = String(body.cc ?? '').trim();
   const subject = String(body.subject ?? '').trim();
@@ -232,7 +263,8 @@ export async function send(body: any, token: string) {
   if (text.length > MAX_BODY_CHARS) throw new Error(`Body too long (limit ${MAX_BODY_CHARS} characters)`);
 
   const html = body.html ? String(body.html) : '';
-  if (html.length > MAX_BODY_CHARS * 5) throw new Error('HTML too long');
+  // a reply/forward carries the quoted original, so the HTML cap is well above the text one
+  if (html.length > 400_000) throw new Error('HTML too long');
   const files: { name: string; mime?: string; data: string }[] = Array.isArray(body.attachments) ? body.attachments : [];
   const bcc = String(body.bcc ?? '').trim();
 
@@ -265,14 +297,45 @@ export async function send(body: any, token: string) {
   ].filter(Boolean);
   const raw = [...headers, ...content].join('\r\n');
 
-  const payload: any = { raw: b64url(raw) };
+  const payload: { raw: string; threadId?: string } = { raw: b64url(raw) };
   if (body.threadId) payload.threadId = String(body.threadId);
-  const res = await gmail('/messages/send', token, {
+  return payload;
+}
+
+// --- a whole conversation, Gmail-style (app: MailThread) ------------------------
+// By thread id, or by any one message's id (a shared mail card only knows that).
+// Metadata only, like sync; bodies come one by one through read().
+export async function thread(q: { threadId?: string; id?: string }, token: string): Promise<{ threadId: string; messages: MailMeta[] }> {
+  let threadId = String(q.threadId ?? '');
+  if (!threadId && q.id) {
+    const m = await gmail(`/messages/${encodeURIComponent(String(q.id))}?format=minimal`, token);
+    if (m.__notFound) throw new Error('That mail is no longer in Gmail');
+    threadId = String(m.threadId);
+  }
+  if (!threadId) throw new Error('`threadId` or `id` is required');
+  const t = await gmail(`/threads/${encodeURIComponent(threadId)}?format=full`, token);
+  if (t.__notFound) throw new Error('That conversation is no longer in Gmail');
+  const messages = (t.messages ?? []).map((m: any) => toMeta(m, true)).filter(Boolean) as MailMeta[];
+  return { threadId, messages: messages.sort((a, b) => (a.at < b.at ? -1 : 1)) };
+}
+
+// --- archive / trash a conversation for everyone (needs gmail.modify) -----------
+export async function modify(threadId: string, what: string, token: string) {
+  const path = `/threads/${encodeURIComponent(threadId)}`;
+  const req = what === 'trash' ? [`${path}/trash`, {}]
+    : what === 'untrash' ? [`${path}/untrash`, {}]
+      : what === 'archive' ? [`${path}/modify`, { removeLabelIds: ['INBOX'] }]
+        : what === 'unarchive' ? [`${path}/modify`, { addLabelIds: ['INBOX'] }]
+          : null;
+  if (!req) throw new Error('`what` must be archive, unarchive, trash or untrash');
+  const res = await fetch(`${GMAIL}${req[0]}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(req[1]),
   });
-  return { id: String(res.id), threadId: String(res.threadId) };
+  if (res.status === 403) throw new Error('Reconnect Gmail once (/api/gmail-setup) to let the app archive and trash');
+  if (!res.ok && res.status !== 404) throw new Error(`Gmail ${what} failed: ${res.status}`);
+  return { ok: true };
 }
 
 
@@ -367,7 +430,7 @@ export async function deleteDraft(id: string, token: string) {
 // From/To/Cc of the newest mails. The People API needs contacts.readonly and
 // contacts.other.readonly (setup scopes, 20 Nov 2026); until Gmail is reconnected
 // those two fail quietly and only the mail scan answers.
-export interface Person { name: string; email: string }
+export interface Person { name: string; email: string; photo?: string }
 const PEOPLE = 'https://people.googleapis.com/v1';
 async function peoplePages(path: string, key: string, token: string): Promise<Person[]> {
   const out: Person[] = [];
@@ -378,7 +441,9 @@ async function peoplePages(path: string, key: string, token: string): Promise<Pe
     const data: any = await res.json();
     for (const p of data[key] ?? []) {
       const name = String(p.names?.[0]?.displayName ?? '');
-      for (const e of p.emailAddresses ?? []) if (e.value) out.push({ name, email: String(e.value).toLowerCase() });
+      // Google draws a letter for people with no picture (default: true) — the app draws its own initials.
+      const photo = (p.photos ?? []).find((x: any) => x.url && !x.default)?.url as string | undefined;
+      for (const e of p.emailAddresses ?? []) if (e.value) out.push({ name, email: String(e.value).toLowerCase(), ...(photo ? { photo } : {}) });
     }
     pageToken = data.nextPageToken ?? '';
     if (!pageToken) break;
@@ -405,12 +470,16 @@ export async function contacts(token: string, scan = 300): Promise<Person[]> {
     return out;
   };
   const lists = await Promise.all([
-    peoplePages('/people/me/connections?personFields=names,emailAddresses', 'connections', token),
-    peoplePages('/otherContacts?readMask=names,emailAddresses', 'otherContacts', token),
+    peoplePages('/people/me/connections?personFields=names,emailAddresses,photos', 'connections', token),
+    peoplePages('/otherContacts?readMask=names,emailAddresses,photos', 'otherContacts', token),
     fromMail().catch(() => [] as Person[]),
   ]);
   // One row per address; a saved contact's name wins over a mail header's.
   const by = new Map<string, Person>();
-  for (const p of lists.flat()) { const o = by.get(p.email); if (!o || (!o.name && p.name)) by.set(p.email, p); }
+  for (const p of lists.flat()) {
+    const o = by.get(p.email);
+    if (!o) by.set(p.email, p);
+    else by.set(p.email, { ...o, name: o.name || p.name, ...(o.photo || p.photo ? { photo: o.photo || p.photo } : {}) });
+  }
   return [...by.values()];
 }

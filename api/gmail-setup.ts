@@ -20,7 +20,8 @@ export const config = { runtime: 'edge' };
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/gmail.compose', // delete Gmail drafts from the app's Drafts tab
+  'https://www.googleapis.com/auth/gmail.compose', // delete Gmail drafts; undo send / send later go through a draft
+  'https://www.googleapis.com/auth/gmail.modify', // archive / trash a conversation for everyone (24 Nov 2026)
   'https://www.googleapis.com/auth/contacts.readonly', // compose To suggestions: saved contacts
   'https://www.googleapis.com/auth/contacts.other.readonly', // ...and everyone Gmail auto-saved from mail
 ].join(' ');

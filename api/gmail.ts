@@ -20,7 +20,10 @@
 //     already holds.
 //   { action: 'send', to, cc?, subject, body, threadId?, inReplyTo? }
 //       → { id, threadId }
-//     Sends as the central account. Plain text only, on purpose.
+//     Sends as the central account.
+//   Also (24 Nov 2026, Gmail-style mail): 'thread' (a whole conversation),
+//   'draftCreate' + 'draftSend' (undo send / send later), 'modify' (archive /
+//   trash a conversation for everyone — needs the gmail.modify scope).
 //
 // METADATA ONLY leaves this function: headers, snippet, attachment NAMES. The
 // body is fetched (Gmail's `full` format is the only one that lists the parts,
@@ -33,7 +36,7 @@
 // ---------------------------------------------------------------------------
 
 import { corsHeaders, fail, guardMethod, verifyCaller } from './_shared';
-import { accessToken, DEFAULT_DAYS, attachment, contacts, deleteDraft, drafts, read, search, send, sync, watch } from './_gmail';
+import { accessToken, DEFAULT_DAYS, attachment, contacts, deleteDraft, draftCreate, draftSend, drafts, modify, read, search, send, sync, thread, watch } from './_gmail';
 
 export const config = { runtime: 'edge' };
 
@@ -77,13 +80,23 @@ export default async function handler(req: Request): Promise<Response> {
       result = { people: await contacts(token) };
     } else if (body?.action === 'draftDelete') {
       result = await deleteDraft(String(body.id ?? ''), token);
+    } else if (body?.action === 'thread') {
+      result = await thread({ threadId: body.threadId, id: body.id }, token);
+    } else if (body?.action === 'draftCreate') {
+      result = await draftCreate(body, token);
+    } else if (body?.action === 'draftSend') {
+      result = await draftSend(String(body.id ?? ''), token);
+      console.log(`[gmail] draftSend uid=${caller.uid} draft=${String(body.id ?? '')}`);
+    } else if (body?.action === 'modify') {
+      result = await modify(String(body.threadId ?? ''), String(body.what ?? ''), token);
+      console.log(`[gmail] modify uid=${caller.uid} ${String(body.what ?? '')} ${String(body.threadId ?? '')}`);
     } else if (body?.action === 'send') {
       result = await send(body, token);
       console.log(`[gmail] send uid=${caller.uid} to=${String(body.to ?? '').slice(0, 60)}`);
     } else {
       // TODO(bug): watch() is never dispatched; the app's daily { action: 'watch' }
       // lands here as 400, so the Gmail watch is never renewed — see audit.
-      return fail('Unknown action: use "sync" or "send"', 400, cors);
+      return fail(`Unknown action: ${String(body?.action ?? '')}`, 400, cors);
     }
     return new Response(JSON.stringify(result), {
       headers: { ...cors, 'content-type': 'application/json', 'cache-control': 'no-store' },
