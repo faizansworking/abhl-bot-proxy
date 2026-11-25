@@ -160,13 +160,17 @@ export async function fetchMessages(ids: string[], token: string): Promise<MailM
 
 // Gmail's own search (the same syntax as its search box: "from:x has:attachment
 // TDS notice"). Gmail already indexes every mail, so nothing is stored by us.
-export async function search(q: string, token: string, max = 30): Promise<MailMeta[]> {
+// `known` = ids the app already holds: listed (ids) but not fetched again. One shared Gmail
+// account = ONE user's per-minute quota for the whole firm, so a re-fetch is never free.
+export async function search(q: string, token: string, max = 30, known: string[] = []): Promise<{ messages: MailMeta[]; ids: string[] }> {
   const text = q.trim().slice(0, 200);
-  if (!text) return [];
+  if (!text) return { messages: [], ids: [] };
   const n = Math.min(30, Math.max(1, Math.floor(max) || 30)); // 5 quota units per mail fetched
   const params = new URLSearchParams({ maxResults: String(n), q: `${text} -in:spam -in:trash -in:draft` });
   const list = await gmail(`/messages?${params}`, token);
-  return fetchMessages((list.messages ?? []).map((m: any) => String(m.id)), token);
+  const ids: string[] = (list.messages ?? []).map((m: any) => String(m.id));
+  const have = new Set(known);
+  return { messages: await fetchMessages(ids.filter((id) => !have.has(id)), token), ids };
 }
 
 // Message ids added since Gmail's change cursor, plus the cursor to hold next.
@@ -188,11 +192,13 @@ export async function historySince(historyId: string, token: string): Promise<{ 
   return { ids: [...ids], newest };
 }
 
-export async function sync(historyId: string, days: number, token: string) {
+// `known` = ids the app already holds (another manager's device synced them first): not re-fetched.
+export async function sync(historyId: string, days: number, token: string, known: string[] = []) {
   // --- incremental: what changed since the cursor ------------------------
   const since = historyId ? await historySince(historyId, token) : null;
   if (since) {
-    const messages = await fetchMessages(since.ids.slice(0, MAX_MESSAGES), token);
+    const have = new Set(known);
+    const messages = await fetchMessages(since.ids.filter((id) => !have.has(id)).slice(0, MAX_MESSAGES), token);
     return { historyId: since.newest, messages, full: false };
   }
 
@@ -401,10 +407,14 @@ export async function attachment(id: string, attachmentId: string, token: string
 // Listing needs only gmail.readonly; deleting one needs gmail.compose (added to the
 // setup scopes 16 Nov 2026 — until the connection is redone, Delete says so).
 export interface GmailDraft { id: string; messageId: string; threadId: string; to: string; cc: string; subject: string; snippet: string; at: string; files: string[] }
-export async function drafts(token: string, max = 50): Promise<GmailDraft[]> {
+// `known` = message ids the app already shows: an edited draft gets a new message id, so a
+// known one is unchanged and comes back as { id, messageId, keep: true } (no fetch, no quota).
+export async function drafts(token: string, max = 50, known: string[] = []): Promise<(GmailDraft | { id: string; messageId: string; keep: true })[]> {
   const list = await gmail(`/drafts?maxResults=${Math.min(100, max)}`, token);
-  const out: GmailDraft[] = [];
+  const have = new Set(known);
+  const out: (GmailDraft | { id: string; messageId: string; keep: true })[] = [];
   for (const d of list.drafts ?? []) {
+    if (d.message?.id && have.has(String(d.message.id))) { out.push({ id: String(d.id), messageId: String(d.message.id), keep: true }); continue; }
     const full = await gmail(`/drafts/${encodeURIComponent(d.id)}?format=full`, token);
     if (full.__notFound) continue;
     const m = full.message ?? {};
@@ -450,7 +460,8 @@ async function peoplePages(path: string, key: string, token: string): Promise<Pe
   }
   return out;
 }
-export async function contacts(token: string, scan = 300): Promise<Person[]> {
+// ponytail: scans the 100 newest mails (5 units each); Google Contacts covers the rest.
+export async function contacts(token: string, scan = 100): Promise<Person[]> {
   const fromMail = async () => {
     const list = await gmail(`/messages?maxResults=${scan}&q=${encodeURIComponent('-in:spam -in:trash -in:chats')}`, token);
     const ids: string[] = (list.messages ?? []).map((m: any) => String(m.id));

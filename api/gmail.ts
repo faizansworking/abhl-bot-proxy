@@ -66,16 +66,16 @@ export default async function handler(req: Request): Promise<Response> {
     let result: unknown;
     if (body?.action === 'sync') {
       const days = Math.min(60, Math.max(1, Number(body.days) || DEFAULT_DAYS));
-      result = await sync(String(body.historyId ?? ''), days, token);
+      result = await sync(String(body.historyId ?? ''), days, token, Array.isArray(body.known) ? body.known.slice(0, 500).map(String) : []);
       console.log(`[gmail] sync uid=${caller.uid} got=${(result as any).messages.length} full=${(result as any).full}`);
     } else if (body?.action === 'read') {
       result = await read(String(body.id ?? ''), token);
     } else if (body?.action === 'search') {
-      result = { messages: await search(String(body.q ?? ''), token, Number(body.max ?? 30)) };
+      result = await search(String(body.q ?? ''), token, Number(body.max ?? 30), (Array.isArray(body.known) ? body.known.slice(0, 500).map(String) : []));
     } else if (body?.action === 'attachment') {
       result = await attachment(String(body.id ?? ''), String(body.attachmentId ?? ''), token);
     } else if (body?.action === 'drafts') {
-      result = { drafts: await drafts(token) };
+      result = { drafts: await drafts(token, 50, (Array.isArray(body.known) ? body.known.slice(0, 500).map(String) : [])) };
     } else if (body?.action === 'contacts') {
       result = { people: await contacts(token) };
     } else if (body?.action === 'draftDelete') {
